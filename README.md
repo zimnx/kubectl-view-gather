@@ -1,4 +1,3 @@
-````markdown
 # kubectl-view-gather
 
 A `kubectl` plugin to **browse and query Kubernetes _must-gather_ dumps** using familiar `kubectl` commands.
