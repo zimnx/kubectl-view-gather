@@ -1,10 +1,15 @@
 package viewgather
 
 import (
+	"errors"
 	"fmt"
+	"github.com/zimnx/kubectl-view-gather/pkg/server"
+	"io"
+	"net/http"
+	"os/exec"
 
 	"github.com/spf13/cobra"
-	"k8s.io/apimachinery/pkg/util/errors"
+	k8serrors "k8s.io/apimachinery/pkg/util/errors"
 
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
@@ -99,19 +104,35 @@ func (o *ViewGatherOptions) Validate() error {
 		errs = append(errs, fmt.Errorf("must-gather-path cannot be empty"))
 	}
 
-	return errors.NewAggregate(errs)
+	return k8serrors.NewAggregate(errs)
 }
 
 func (o *ViewGatherOptions) Run() error {
+	apiServer := server.NewAPIServerStub()
+	serverAddress := "localhost:8080" // TODO: make this configurable or pick a free port dynamically
+	go func() {
+		if err := http.ListenAndServe(serverAddress, apiServer); err != nil {
+			if errors.Is(err, http.ErrServerClosed) {
+				fmt.Printf("Failed to start server: %v", err)
+			}
+		}
+	}()
 
-	// TODO: spawn server faking kube-apiserver
-
-	err := o.addNewMustGatherContextToKubeconfig("TODO Server address")
+	err := o.addNewMustGatherContextToKubeconfig(fmt.Sprintf("http://%s", serverAddress))
 	if err != nil {
 		return fmt.Errorf("can't save must gather context in kubeconfig: %w", err)
 	}
 
-	// TODO: execute kubectl with passed arguments and custom context
+	args := filterMustGatherArgs(o.args)
+	args = append(args, "--context", kubeconfigMustGatherName)
+	out, err := exec.Command("kubectl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to run kubectl: %w", err)
+	}
+
+	if _, err = io.WriteString(o.Out, string(out)); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
 
 	return nil
 }
@@ -125,9 +146,7 @@ func (o *ViewGatherOptions) addNewMustGatherContextToKubeconfig(server string) e
 
 	o.rawConfig.Contexts[kubeconfigMustGatherName] = resultingContext
 	o.rawConfig.Clusters[kubeconfigMustGatherName] = &api.Cluster{
-		Server:                "",
-		TLSServerName:         "",
-		InsecureSkipTLSVerify: false,
+		Server: server,
 	}
 	o.rawConfig.AuthInfos[kubeconfigMustGatherName] = &api.AuthInfo{}
 
@@ -137,4 +156,34 @@ func (o *ViewGatherOptions) addNewMustGatherContextToKubeconfig(server string) e
 	}
 
 	return nil
+}
+
+func filterMustGatherArgs(args []string) []string {
+	var filtered []string
+	skipNext := false
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		if skipNext {
+			// Skip the value for --must-gather-path
+			skipNext = false
+			continue
+		}
+
+		if arg == "--must-gather-path" {
+			// This is the split form; skip next arg too
+			skipNext = true
+			continue
+		}
+
+		if len(arg) > 20 && arg[:20] == "--must-gather-path=" {
+			// This is the equals form; skip
+			continue
+		}
+
+		filtered = append(filtered, arg)
+	}
+
+	return filtered
 }

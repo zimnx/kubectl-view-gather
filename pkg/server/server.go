@@ -1,13 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"net/http"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/registry/rest"
 )
 
@@ -19,10 +21,12 @@ func NewAPIServerStub() *APIServerStub {
 	s := &APIServerStub{}
 	mux := http.NewServeMux()
 	mux.Handle("/apis", http.HandlerFunc(s.handleAPIs))
+	mux.Handle("/apis/", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
 
-	mux.Handle()
+	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespaced))
+
 	s.mux = mux
 	return s
 }
@@ -37,15 +41,58 @@ func (s *APIServerStub) handleAPIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := &v1.APIGroupList{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "APIGroupList",
-			APIVersion: "v1",
-		},
-		Groups: standardAPIGroupList,
+	// This should handle both `/apis` and `/apis/discovery.k8s.io/v1` like requests.
+
+	path := strings.TrimPrefix(r.URL.Path, "/apis")
+	path = strings.Trim(path, "/")
+
+	if path == "" {
+		// Handle GET /apis
+		resp := &metav1.APIGroupList{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "APIGroupList",
+				APIVersion: "v1",
+			},
+			Groups: standardAPIGroupList,
+		}
+		writeJSON(w, resp)
+		return
 	}
 
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	group := parts[0]
+	version := parts[1]
+
+	resp := apiResourceListForGroupVersion(group, version)
+	resp.Kind = "APIResourceList"
+	resp.APIVersion = "v1"
+
 	writeJSON(w, resp)
+}
+
+func apiResourceListForGroupVersion(group string, version string) *metav1.APIResourceList {
+	switch group {
+	case "apps":
+		return &metav1.APIResourceList{
+			GroupVersion: "apps/v1",
+			APIResources: []metav1.APIResource{
+				{Name: "deployments", Namespaced: true, Kind: "Deployment", Verbs: []string{"get", "list", "watch"}},
+				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet", Verbs: []string{"get", "list", "watch"}},
+				{Name: "daemonsets", Namespaced: true, Kind: "DaemonSet", Verbs: []string{"get", "list", "watch"}},
+				{Name: "statefulsets", Namespaced: true, Kind: "StatefulSet", Verbs: []string{"get", "list", "watch"}},
+			},
+		}
+	default:
+		// If not found, return an empty APIResourceList.
+		return &metav1.APIResourceList{
+			GroupVersion: group + "/" + version,
+		}
+	}
 }
 
 func (s *APIServerStub) handleAPI(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +117,7 @@ func (s *APIServerStub) handleAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, resp)
 	case "v1":
-		// Handle GET /api/v1
+		// Handle GET /api/v1 (looks like a special case as the rest is handled under /apis/{resource}/{version}).
 		resp := &metav1.APIResourceList{
 			GroupVersion: "v1",
 			APIResources: []metav1.APIResource{
@@ -106,16 +153,39 @@ func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request)
 	namespace := parts[0]
 	resource := parts[1]
 
-	resp := map[string]string{
-		"namespace": namespace,
-		"resource":  resource,
-	}
-	writeJSON(w, resp)
-
 	// TODO: fetch the actual resource from the state
 
 	// return the resource
-	rest.NewDefaultTableConvertor(schema.GroupResource())
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+
+	obj := &v1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind: "Pod",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			CreationTimestamp: metav1.Time{Time: time.Now()},
+			Name:              "example-pod",
+			Namespace:         namespace,
+		},
+	}
+
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

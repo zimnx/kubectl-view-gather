@@ -4,6 +4,12 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 var standardAPIGroupList = []metav1.APIGroup{
 	{
+		Name: "v1",
+		Versions: []metav1.GroupVersionForDiscovery{
+			{GroupVersion: "v1", Version: "v1"},
+		},
+	},
+	{
 		Name: "admissionregistration.k8s.io",
 		Versions: []metav1.GroupVersionForDiscovery{
 			{GroupVersion: "admissionregistration.k8s.io/v1", Version: "v1"},
