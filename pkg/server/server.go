@@ -3,28 +3,45 @@ package server
 import (
 	"context"
 	"encoding/json"
-	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/registry/rest"
 	"net/http"
 	"strings"
-	"time"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apiserver/pkg/registry/rest"
 )
 
-type APIServerStub struct {
-	mux *http.ServeMux
+// APIGroupsMetaStore is an interface that defines methods to retrieve API groups and resources.
+type APIGroupsMetaStore interface {
+	GetAPIGroups() ([]metav1.APIGroup, error)
+	GetAPIResources(gv metav1.GroupVersion) ([]metav1.APIResource, error)
 }
 
-func NewAPIServerStub() *APIServerStub {
-	s := &APIServerStub{}
+// ObjectStore is an interface that defines methods to retrieve objects by namespace and name.
+type ObjectStore interface {
+	ListNamespacedObjects(resource string, namespace string) (runtime.Object, error)
+	GetNamespacedObject(resource string, nn types.NamespacedName) (runtime.Object, error)
+	GetClusterObject(resource string, name string) (runtime.Object, error)
+}
+
+type APIServerStub struct {
+	mux         *http.ServeMux
+	metaStore   APIGroupsMetaStore
+	objectStore ObjectStore
+}
+
+func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *APIServerStub {
+	s := &APIServerStub{
+		metaStore:   metaStore,
+		objectStore: objectStore,
+	}
+
 	mux := http.NewServeMux()
 	mux.Handle("/apis", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/apis/", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
-
 	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespaced))
 
 	s.mux = mux
@@ -41,19 +58,22 @@ func (s *APIServerStub) handleAPIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// This should handle both `/apis` and `/apis/discovery.k8s.io/v1` like requests.
-
 	path := strings.TrimPrefix(r.URL.Path, "/apis")
 	path = strings.Trim(path, "/")
 
 	if path == "" {
 		// Handle GET /apis
+		apiGroups, err := s.metaStore.GetAPIGroups()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		resp := &metav1.APIGroupList{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       "APIGroupList",
 				APIVersion: "v1",
 			},
-			Groups: standardAPIGroupList,
+			Groups: apiGroups,
 		}
 		writeJSON(w, resp)
 		return
@@ -68,30 +88,32 @@ func (s *APIServerStub) handleAPIs(w http.ResponseWriter, r *http.Request) {
 	group := parts[0]
 	version := parts[1]
 
-	resp := apiResourceListForGroupVersion(group, version)
-	resp.Kind = "APIResourceList"
-	resp.APIVersion = "v1"
-
+	resp := s.getAPIResourceList(group, version)
 	writeJSON(w, resp)
 }
 
-func apiResourceListForGroupVersion(group string, version string) *metav1.APIResourceList {
-	switch group {
-	case "apps":
+func (s *APIServerStub) getAPIResourceList(group string, version string) *metav1.APIResourceList {
+	resources, err := s.metaStore.GetAPIResources(metav1.GroupVersion{Group: group, Version: version})
+	if err != nil {
+		// If the group/version is not found, return an empty APIResourceList.
+		// TODO: handle error better way?
 		return &metav1.APIResourceList{
-			GroupVersion: "apps/v1",
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment", Verbs: []string{"get", "list", "watch"}},
-				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet", Verbs: []string{"get", "list", "watch"}},
-				{Name: "daemonsets", Namespaced: true, Kind: "DaemonSet", Verbs: []string{"get", "list", "watch"}},
-				{Name: "statefulsets", Namespaced: true, Kind: "StatefulSet", Verbs: []string{"get", "list", "watch"}},
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "APIResourceList",
+				APIVersion: "v1",
 			},
-		}
-	default:
-		// If not found, return an empty APIResourceList.
-		return &metav1.APIResourceList{
 			GroupVersion: group + "/" + version,
 		}
+	}
+
+	// If the group/version is found, return the APIResourceList.
+	return &metav1.APIResourceList{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "APIResourceList",
+			APIVersion: "v1",
+		},
+		GroupVersion: group + "/" + version,
+		APIResources: resources,
 	}
 }
 
@@ -124,7 +146,6 @@ func (s *APIServerStub) handleAPI(w http.ResponseWriter, r *http.Request) {
 				{Name: "pods", Namespaced: true, Kind: "Pod", Verbs: []string{"get", "list", "watch"}},
 				{Name: "services", Namespaced: true, Kind: "Service", Verbs: []string{"get", "list", "watch"}},
 				{Name: "namespaces", Namespaced: false, Kind: "Namespace", Verbs: []string{"get", "list", "watch"}},
-				// add more as needed
 			},
 		}
 		writeJSON(w, resp)
@@ -153,25 +174,18 @@ func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request)
 	namespace := parts[0]
 	resource := parts[1]
 
-	// TODO: fetch the actual resource from the state
+	objList, err := s.objectStore.ListNamespacedObjects(resource, namespace)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// return the resource
 	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
 		Resource: resource,
 	})
 
-	obj := &v1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind: "Pod",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			CreationTimestamp: metav1.Time{Time: time.Now()},
-			Name:              "example-pod",
-			Namespace:         namespace,
-		},
-	}
-
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), objList, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

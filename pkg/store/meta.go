@@ -1,6 +1,8 @@
-package server
+package store
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 var standardAPIGroupList = []metav1.APIGroup{
 	{
@@ -165,4 +167,21 @@ var standardAPIGroupList = []metav1.APIGroup{
 			GroupVersion: "storage.k8s.io/v1", Version: "v1",
 		},
 	},
+}
+
+type Meta struct {
+}
+
+func NewMeta() *Meta {
+	return &Meta{}
+}
+
+func (m Meta) GetAPIGroups() ([]metav1.APIGroup, error) {
+	// TODO: implement properly
+	return standardAPIGroupList, nil
+}
+
+func (m Meta) GetAPIResources(gv metav1.GroupVersion) ([]metav1.APIResource, error) {
+	// TODO: implement properly
+	return []metav1.APIResource{}, nil
 }

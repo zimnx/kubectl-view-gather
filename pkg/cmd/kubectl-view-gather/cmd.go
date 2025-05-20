@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/zimnx/kubectl-view-gather/pkg/server"
+	"github.com/zimnx/kubectl-view-gather/pkg/store"
 	"io"
 	"net/http"
 	"os/exec"
@@ -108,7 +109,9 @@ func (o *ViewGatherOptions) Validate() error {
 }
 
 func (o *ViewGatherOptions) Run() error {
-	apiServer := server.NewAPIServerStub()
+	metaStore := store.NewMeta()
+	objectStore := store.NewObject()
+	apiServer := server.NewAPIServerStub(metaStore, objectStore)
 	serverAddress := "localhost:8080" // TODO: make this configurable or pick a free port dynamically
 	go func() {
 		if err := http.ListenAndServe(serverAddress, apiServer); err != nil {
