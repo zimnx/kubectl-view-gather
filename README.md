@@ -11,9 +11,9 @@ Must-gather dumps contain snapshots of Kubernetes resources (e.g., Pods, Deploym
 This plugin lets you query them like:
 
 ```sh
-kubectl view gather --must-gather-path=~/my-must-gather get pods --namespace my-namespace
-kubectl view gather --must-gather-path=~/my-must-gather describe node my-node
-kubectl view gather --must-gather-path=~/my-must-gather logs my-pod
+kubectl view gather --must-gather-path=~/my-must-gather -- get pods --namespace my-namespace
+kubectl view gather --must-gather-path=~/my-must-gather -- describe node my-node
+kubectl view gather --must-gather-path=~/my-must-gather -- logs my-pod
 ````
 
 ## 🔧 Installation
@@ -33,13 +33,12 @@ chmod +x /usr/local/bin/kubectl-view-gather
 First, specify the path to a must-gather dump:
 
 ```sh
-kubectl view gather --must-gather-path /path/to/must-gather get pods
+kubectl view gather --must-gather-path /path/to/must-gather -- get pods
 ```
 
 Or set the path via an environment variable:
 
 ```sh
 export MUST_GATHER_PATH=/path/to/must-gather
-kubectl view gather get nodes
+kubectl view gather -- get nodes
 ```
-
