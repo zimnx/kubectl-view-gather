@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/zimnx/kubectl-view-gather/pkg/scheme"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -293,7 +294,7 @@ func (mg *MustGatherArchive) ListNamespacedObjects(gvr metav1.GroupVersionResour
 		}
 
 		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			if objMetadata.Namespace != namespace {
+			if namespace != corev1.NamespaceAll && objMetadata.Namespace != namespace {
 				return
 			}
 			objects = append(objects, *unstr)

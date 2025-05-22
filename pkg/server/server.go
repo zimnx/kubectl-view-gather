@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/zimnx/kubectl-view-gather/pkg/slices"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -247,10 +250,34 @@ func (s *APIServerStub) handleV1ClusterWideList(w http.ResponseWriter, r *http.R
 		Resource: resourceName,
 	}
 
-	obj, err := s.objectStore.ListClusterObjects(gvr)
+	apiResources, err := s.metaStore.GetAPIResources(metav1.GroupVersion{Group: "", Version: version})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+
+	apiResource, _, ok := slices.Find(apiResources, func(r metav1.APIResource) bool {
+		return r.Name == resourceName
+	})
+	if !ok {
+		http.Error(w, fmt.Errorf("can't find gvr %s", gvr).Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var obj runtime.Object
+
+	if apiResource.Namespaced {
+		obj, err = s.objectStore.ListNamespacedObjects(gvr, corev1.NamespaceAll)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		obj, err = s.objectStore.ListClusterObjects(gvr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Convert into table
