@@ -79,9 +79,8 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 	// Filter and make apiGroups unique by group name
 	uniqueGroups := make(map[string]metav1.APIGroup)
 	for _, g := range apiGroups {
-		if _, exists := uniqueGroups[g.Name]; !exists {
-			uniqueGroups[g.Name] = g
-		}
+		key := g.Name + "|" + g.APIVersion
+		uniqueGroups[key] = g
 	}
 	apiGroups = make([]metav1.APIGroup, 0, len(uniqueGroups))
 	for _, g := range uniqueGroups {
