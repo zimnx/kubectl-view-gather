@@ -383,11 +383,36 @@ func (s *APIServerStub) handleClusterWideList(w http.ResponseWriter, r *http.Req
 		Resource: resourceName,
 	}
 
-	objList, err := s.objectStore.ListClusterObjects(gvr)
+	apiResources, err := s.metaStore.GetAPIResources(metav1.GroupVersion{Group: group, Version: version})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	apiResource, _, ok := slices.Find(apiResources, func(r metav1.APIResource) bool {
+		return r.Name == resourceName
+	})
+	if !ok {
+		http.Error(w, fmt.Errorf("can't find gvr %s", gvr).Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var objList runtime.Object
+
+	if apiResource.Namespaced {
+		objList, err = s.objectStore.ListNamespacedObjects(gvr, corev1.NamespaceAll)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		objList, err = s.objectStore.ListClusterObjects(gvr)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	// return the resource
 	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
 		Resource: resource,
