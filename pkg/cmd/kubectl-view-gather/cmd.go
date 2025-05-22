@@ -57,13 +57,14 @@ func NewViewGatherCommand(streams genericiooptions.IOStreams) *cobra.Command {
 	o := NewViewGatherOptions(streams)
 
 	cmd := &cobra.Command{
-		Use:          "view gather [flags]",
+		Use:          "view gather [flags] -- [kubectl command and flags]",
 		Short:        "Browse must-gather archive using kubectl-like commands",
 		Example:      commandExample,
 		SilenceUsage: true,
 		Annotations: map[string]string{
 			cobra.CommandDisplayNameAnnotation: "kubectl view gather",
 		},
+		Args: cobra.ArbitraryArgs, // Accept arbitrary args after --
 		RunE: func(c *cobra.Command, args []string) error {
 			if err := o.Complete(c, args); err != nil {
 				return err
@@ -130,7 +131,7 @@ func (o *ViewGatherOptions) Run() error {
 	args = append(args, "--context", kubeconfigMustGatherName)
 	out, err := exec.Command("kubectl", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to run kubectl: %w", err)
+		return fmt.Errorf("failed to run kubectl: %w\n%s", err, string(out))
 	}
 
 	if _, err = io.WriteString(o.Out, string(out)); err != nil {
