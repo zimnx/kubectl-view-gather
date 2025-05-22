@@ -258,8 +258,6 @@ func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	writeJSON(w, objList)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
