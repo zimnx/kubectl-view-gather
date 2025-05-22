@@ -44,9 +44,11 @@ func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *AP
 	mux.Handle("/apis/", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
-	mux.Handle("/api/v1/{resource}/", http.HandlerFunc(s.handleV1List))
+	mux.Handle("/api/v1/{resource}/", http.HandlerFunc(s.handleV1ClusterWideList))
 	mux.Handle("/api/v1/namespaces/{namespace}/{resource}", http.HandlerFunc(s.handleNamespacedV1List))
 	mux.Handle("/api/v1/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGetV1))
+	mux.Handle("/apis/{apiGroup}/{apiVersion}/{resource}", http.HandlerFunc(s.handleClusterWideList))
+	mux.Handle("/apis/{apiGroup}/{apiVersion}/{resource}/{objectName}", http.HandlerFunc(s.handleClusterWideGet))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespacedListing))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGet))
 
@@ -218,8 +220,8 @@ func (s *APIServerStub) handleNamespacedV1List(w http.ResponseWriter, r *http.Re
 	}
 }
 
-// handleV1List handles `/api/v1/{resourceName}}/"` requests.
-func (s *APIServerStub) handleV1List(w http.ResponseWriter, r *http.Request) {
+// handleV1ClusterWideList handles `/api/v1/{resourceName}}/"` requests.
+func (s *APIServerStub) handleV1ClusterWideList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -326,6 +328,61 @@ func (s *APIServerStub) handleNamespacedGetV1(w http.ResponseWriter, r *http.Req
 	}
 }
 
+// handleClusterWideList handles `/apis/{apiGroup}/{apiVersion}/{resource}` requests.
+func (s *APIServerStub) handleClusterWideList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/apis/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) != 3 {
+		http.NotFound(w, r)
+		return
+	}
+
+	group := parts[0]
+	version := parts[1]
+	resourceName := parts[2]
+
+	resource := group + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resourceName,
+	}
+
+	objList, err := s.objectStore.ListClusterObjects(gvr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// return the resource
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), objList, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
 // handleNamespacedListing handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}` requests.
 func (s *APIServerStub) handleNamespacedListing(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -375,6 +432,61 @@ func (s *APIServerStub) handleNamespacedListing(w http.ResponseWriter, r *http.R
 	tbl.Kind = "Table"
 	tbl.APIVersion = "meta.k8s.io/v1"
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleClusterWideGet handles `/apis/{apiGroup}/{apiVersion}/{resource}/{objectName}` requests.
+func (s *APIServerStub) handleClusterWideGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/apis/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 4)
+	if len(parts) != 4 {
+		http.NotFound(w, r)
+		return
+	}
+
+	group := parts[0]
+	version := parts[1]
+	resourceName := parts[3]
+	objectName := parts[4]
+
+	resource := group + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resourceName,
+	}
+
+	obj, err := s.objectStore.GetClusterObject(gvr, objectName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert into table
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(tbl); err != nil {
