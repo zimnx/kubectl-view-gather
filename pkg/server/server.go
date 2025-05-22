@@ -43,7 +43,8 @@ func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *AP
 	mux.Handle("/apis/", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
-	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespaced))
+	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespacedV1))
+	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespaced))
 
 	s.mux = mux
 	return s
@@ -82,7 +83,7 @@ func (s *APIServerStub) handleAPIs(w http.ResponseWriter, r *http.Request) {
 
 	var group, version string
 
-	parts := strings.SplitN(path, "/", 2)
+	parts := strings.Split(path, "/")
 	if len(parts) == 1 {
 		version = parts[0]
 	} else if len(parts) == 2 {
@@ -159,8 +160,8 @@ func (s *APIServerStub) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleNamespaced handles `GET /api/v1/namespaces/{namespace}/{resource}` requests.
-func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request) {
+// handleNamespacedV1 handles `GET /api/v1/namespaces/{namespace}/{resource}` requests.
+func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -205,6 +206,60 @@ func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+}
+
+// handleNamespaced handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}` requests.
+func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/apis/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 5)
+	if len(parts) != 5 {
+		http.NotFound(w, r)
+		return
+	}
+
+	group := parts[0]
+	version := parts[1]
+	namespace := parts[3]
+	resourceName := parts[4]
+
+	resource := group + "/" + version + "/" + resourceName
+
+	// List objects in the specified namespace
+	objList, err := s.objectStore.ListNamespacedObjects(resource, namespace)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// return the resource
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), objList, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, objList)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
