@@ -44,7 +44,8 @@ func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *AP
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespacedV1))
-	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespaced))
+	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespacedListing))
+	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGet))
 
 	s.mux = mux
 	return s
@@ -208,8 +209,8 @@ func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// handleNamespaced handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}` requests.
-func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request) {
+// handleNamespacedListing handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}` requests.
+func (s *APIServerStub) handleNamespacedListing(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -252,6 +253,57 @@ func (s *APIServerStub) handleNamespaced(w http.ResponseWriter, r *http.Request)
 	tbl.Kind = "Table"
 	tbl.APIVersion = "meta.k8s.io/v1"
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleNamespacedGet handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}/{objectName}` requests.
+func (s *APIServerStub) handleNamespacedGet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/apis/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 6)
+	if len(parts) != 6 {
+		http.NotFound(w, r)
+		return
+	}
+
+	group := parts[0]
+	version := parts[1]
+	namespace := parts[3]
+	resourceName := parts[4]
+	objectName := parts[5]
+
+	resource := group + "/" + version + "/" + resourceName
+
+	obj, err := s.objectStore.GetNamespacedObject(resource, types.NamespacedName{Namespace: namespace, Name: objectName})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert into table
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(tbl); err != nil {
