@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/zimnx/kubectl-view-gather/pkg/scheme"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,8 +32,6 @@ func NewMustGatherArchive(path string) *MustGatherArchive {
 }
 
 func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
-	clusterScopedAPIResourcesPath := path.Join(mg.Path, clusterScopedResourcesPath)
-
 	var apiGroups []metav1.APIGroup
 
 	visitFunc := func(resource *APIGroupResource) error {
@@ -69,7 +66,7 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 		return nil
 	}
 
-	err := mg.visitAPIGroupResources(clusterScopedAPIResourcesPath, visitFunc)
+	err := mg.visitClusterWideAPIGroupResources(visitFunc)
 	if err != nil {
 		return nil, fmt.Errorf("can't visit cluster scoped resources: %w", err)
 	}
@@ -94,8 +91,6 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 }
 
 func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.APIResource, error) {
-	clusterScopedAPIResourcesPath := path.Join(mg.Path, clusterScopedResourcesPath)
-
 	var apiResources []metav1.APIResource
 
 	visitFunc := func(namespaced bool) func(resource *APIGroupResource) error {
@@ -138,7 +133,7 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 		}
 	}
 
-	err := mg.visitAPIGroupResources(clusterScopedAPIResourcesPath, visitFunc(false))
+	err := mg.visitClusterWideAPIGroupResources(visitFunc(false))
 	if err != nil {
 		return nil, fmt.Errorf("can't visit cluster scoped resources: %w", err)
 	}
@@ -213,6 +208,11 @@ func (gr *APIGroupResource) VisitResources(visitFunc func(unstr *unstructured.Un
 	}
 
 	return nil
+}
+
+func (mg *MustGatherArchive) visitClusterWideAPIGroupResources(visitFunc func(resources *APIGroupResource) error) error {
+	clusterScopedAPIResourcesPath := path.Join(mg.Path, clusterScopedResourcesPath)
+	return mg.visitAPIGroupResources(clusterScopedAPIResourcesPath, visitFunc)
 }
 
 func (mg *MustGatherArchive) visitNamespacedAPIGroupResources(visitFunc func(resources *APIGroupResource) error) error {
@@ -315,30 +315,78 @@ func (mg *MustGatherArchive) ListNamespacedObjects(gvr metav1.GroupVersionResour
 }
 
 func (mg *MustGatherArchive) GetNamespacedObject(gvr metav1.GroupVersionResource, nn types.NamespacedName) (runtime.Object, error) {
-	// TODO: implement properly
-	return &corev1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "pod",
-			Namespace:         "ns",
-			CreationTimestamp: metav1.Now(),
-		},
-	}, nil
+	var obj *unstructured.Unstructured
+	err := mg.visitNamespacedAPIGroupResources(func(apiResources *APIGroupResource) error {
+		if gvr.Group != apiResources.APIGroup || gvr.Resource != apiResources.Resource {
+			return nil
+		}
+
+		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
+			if objMetadata.Namespace != nn.Namespace || objMetadata.Name != nn.Name {
+				return
+			}
+			obj = unstr
+		})
+		if err != nil {
+			return fmt.Errorf("can't visit resources: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
+	}
+
+	return obj, nil
 }
 func (mg *MustGatherArchive) GetClusterObject(gvr metav1.GroupVersionResource, name string) (runtime.Object, error) {
-	// TODO: implement properly
-	return &corev1.Pod{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Pod",
-			APIVersion: "v1",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "pod",
-			Namespace:         "ns",
-			CreationTimestamp: metav1.Now(),
-		},
+	var obj *unstructured.Unstructured
+	err := mg.visitClusterWideAPIGroupResources(func(apiResources *APIGroupResource) error {
+		if gvr.Group != apiResources.APIGroup || gvr.Resource != apiResources.Resource {
+			return nil
+		}
+
+		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
+			if objMetadata.Name != name {
+				return
+			}
+			obj = unstr
+		})
+		if err != nil {
+			return fmt.Errorf("can't visit resources: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't visit cluster wide resources: %w", err)
+	}
+
+	return obj, nil
+}
+
+func (mg *MustGatherArchive) ListClusterObjects(gvr metav1.GroupVersionResource) (runtime.Object, error) {
+	var objects []unstructured.Unstructured
+	err := mg.visitClusterWideAPIGroupResources(func(apiResources *APIGroupResource) error {
+		if gvr.Group != apiResources.APIGroup || gvr.Resource != apiResources.Resource {
+			return nil
+		}
+
+		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
+			objects = append(objects, *unstr)
+		})
+		if err != nil {
+			return fmt.Errorf("can't visit resources: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
+	}
+
+	return &unstructured.UnstructuredList{
+		Object: nil,
+		Items:  objects,
 	}, nil
 }

@@ -22,6 +22,7 @@ type APIGroupsMetaStore interface {
 // ObjectStore is an interface that defines methods to retrieve objects by namespace and name.
 type ObjectStore interface {
 	ListNamespacedObjects(gvr metav1.GroupVersionResource, namespace string) (runtime.Object, error)
+	ListClusterObjects(gvr metav1.GroupVersionResource) (runtime.Object, error)
 	GetNamespacedObject(gvr metav1.GroupVersionResource, nn types.NamespacedName) (runtime.Object, error)
 	GetClusterObject(gvr metav1.GroupVersionResource, name string) (runtime.Object, error)
 }
@@ -43,7 +44,9 @@ func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *AP
 	mux.Handle("/apis/", http.HandlerFunc(s.handleAPIs))
 	mux.Handle("/api/", http.HandlerFunc(s.handleAPI))
 	mux.Handle("/api", http.HandlerFunc(s.handleAPI))
-	mux.Handle("/api/v1/namespaces/", http.HandlerFunc(s.handleNamespacedV1))
+	mux.Handle("/api/v1/{resource}/", http.HandlerFunc(s.handleV1List))
+	mux.Handle("/api/v1/namespaces/{namespace}/{resource}", http.HandlerFunc(s.handleNamespacedV1List))
+	mux.Handle("/api/v1/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGetV1))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespacedListing))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGet))
 
@@ -161,8 +164,8 @@ func (s *APIServerStub) handleAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleNamespacedV1 handles `GET /api/v1/namespaces/{namespace}/{resource}` requests.
-func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Request) {
+// handleNamespacedV1List handles `GET /api/v1/namespaces/{namespace}/{resource}` requests.
+func (s *APIServerStub) handleNamespacedV1List(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
@@ -181,10 +184,9 @@ func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Reques
 	namespace := parts[0]
 	resource := parts[1]
 
-	// FIXME: parse it
 	gvr := metav1.GroupVersionResource{
 		Group:    "",
-		Version:  "",
+		Version:  "v1",
 		Resource: resource,
 	}
 
@@ -208,6 +210,114 @@ func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Reques
 	tbl.Kind = "Table"
 	tbl.APIVersion = "meta.k8s.io/v1"
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleV1List handles `/api/v1/{resourceName}}/"` requests.
+func (s *APIServerStub) handleV1List(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) != 2 {
+		http.NotFound(w, r)
+		return
+	}
+
+	version := parts[0]
+	resourceName := parts[1]
+
+	resource := "" + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    "",
+		Version:  version,
+		Resource: resourceName,
+	}
+
+	obj, err := s.objectStore.ListClusterObjects(gvr)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert into table
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(tbl); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleNamespacedGetV1 handles `/api/v1/namespaces/{namespace}/{resourceName}/{objectName}` requests.
+func (s *APIServerStub) handleNamespacedGetV1(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 5)
+	if len(parts) != 5 {
+		http.NotFound(w, r)
+		return
+	}
+
+	version := parts[0]
+	namespace := parts[2]
+	resourceName := parts[3]
+	objectName := parts[4]
+
+	resource := "" + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    "",
+		Version:  version,
+		Resource: resourceName,
+	}
+
+	obj, err := s.objectStore.GetNamespacedObject(gvr, types.NamespacedName{Namespace: namespace, Name: objectName})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert into table
+	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+		Resource: resource,
+	})
+	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	tbl.Kind = "Table"
+	tbl.APIVersion = "meta.k8s.io/v1"
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(tbl); err != nil {
