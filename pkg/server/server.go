@@ -3,13 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/registry/rest"
-	"net/http"
-	"strings"
 )
 
 // APIGroupsMetaStore is an interface that defines methods to retrieve API groups and resources.
@@ -79,14 +80,18 @@ func (s *APIServerStub) handleAPIs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var group, version string
+
 	parts := strings.SplitN(path, "/", 2)
-	if len(parts) != 2 {
+	if len(parts) == 1 {
+		version = parts[0]
+	} else if len(parts) == 2 {
+		group = parts[0]
+		version = parts[1]
+	} else {
 		http.NotFound(w, r)
 		return
 	}
-
-	group := parts[0]
-	version := parts[1]
 
 	resp := s.getAPIResourceList(group, version)
 	writeJSON(w, resp)
