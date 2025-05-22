@@ -297,8 +297,13 @@ func (s *APIServerStub) handleNamespacedGet(w http.ResponseWriter, r *http.Reque
 	objectName := parts[5]
 
 	resource := group + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resourceName,
+	}
 
-	obj, err := s.objectStore.GetNamespacedObject(resource, types.NamespacedName{Namespace: namespace, Name: objectName})
+	obj, err := s.objectStore.GetNamespacedObject(gvr, types.NamespacedName{Namespace: namespace, Name: objectName})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
