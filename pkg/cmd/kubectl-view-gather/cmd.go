@@ -3,18 +3,19 @@ package viewgather
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os/exec"
+
 	"github.com/spf13/cobra"
 	"github.com/zimnx/kubectl-view-gather/pkg/mustgather"
 	"github.com/zimnx/kubectl-view-gather/pkg/server"
 	"github.com/zimnx/kubectl-view-gather/pkg/store"
-	"io"
 	k8serrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
-	"net/http"
-	"os/exec"
 )
 
 var (
@@ -111,7 +112,7 @@ func (o *ViewGatherOptions) Run() error {
 	mg := mustgather.NewMustGatherArchive(o.mustGatherPath)
 	objectStore := store.NewObject()
 	apiServer := server.NewAPIServerStub(mg, objectStore)
-	serverAddress := "localhost:8080" // TODO: make this configurable or pick a free port dynamically
+	serverAddress := ":8080" // TODO: make this configurable or pick a free port dynamically
 	go func() {
 		if err := http.ListenAndServe(serverAddress, apiServer); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {

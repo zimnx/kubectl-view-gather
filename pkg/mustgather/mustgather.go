@@ -76,8 +76,19 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
 	}
 
-	return apiGroups, nil
+	// Filter and make apiGroups unique by group name
+	uniqueGroups := make(map[string]metav1.APIGroup)
+	for _, g := range apiGroups {
+		if _, exists := uniqueGroups[g.Name]; !exists {
+			uniqueGroups[g.Name] = g
+		}
+	}
+	apiGroups = make([]metav1.APIGroup, 0, len(uniqueGroups))
+	for _, g := range uniqueGroups {
+		apiGroups = append(apiGroups, g)
+	}
 
+	return apiGroups, nil
 }
 
 func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.APIResource, error) {
@@ -91,13 +102,19 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 				return nil
 			}
 
+			apiResourcesKindMap := map[string]metav1.APIResource{}
+
 			err := resource.VisitResources(func(objMetadata *metav1.PartialObjectMetadata) {
 				objGVK := objMetadata.TypeMeta.GroupVersionKind()
 				if objGVK.Group != gv.Group || objGVK.Version != gv.Version {
 					return
 				}
 
-				apiResources = append(apiResources, metav1.APIResource{
+				if _, ok := apiResourcesKindMap[objGVK.Kind]; ok {
+					return
+				}
+
+				apiResourcesKindMap[objGVK.Kind] = metav1.APIResource{
 					Name:         fmt.Sprintf("%ss", strings.ToLower(objGVK.Kind)),
 					SingularName: strings.ToLower(objGVK.Kind),
 					Namespaced:   namespaced,
@@ -105,11 +122,14 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 					Version:      objGVK.Version,
 					Kind:         objGVK.Kind,
 					Verbs:        []string{"get", "list"},
-				})
-
+				}
 			})
 			if err != nil {
 				return fmt.Errorf("can't visit resources: %w", err)
+			}
+
+			for _, v := range apiResourcesKindMap {
+				apiResources = append(apiResources, v)
 			}
 
 			return nil
@@ -124,6 +144,16 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 	err = mg.visitNamespacedAPIGroupResources(visitFunc(true))
 	if err != nil {
 		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
+	}
+
+	unique := make(map[string]metav1.APIResource)
+	for _, r := range apiResources {
+		key := r.Group + "|" + r.Version + "|" + r.Kind
+		unique[key] = r
+	}
+	apiResources = make([]metav1.APIResource, 0, len(unique))
+	for _, v := range unique {
+		apiResources = append(apiResources, v)
 	}
 
 	return apiResources, nil
