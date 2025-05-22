@@ -39,8 +39,9 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 	visitFunc := func(resource *APIGroupResource) error {
 		versions := map[string]struct{}{}
 
-		err := resource.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			versions[objMetadata.TypeMeta.GroupVersionKind().Version] = struct{}{}
+		err := resource.VisitResources(func(r *Resource) error {
+			versions[r.metadata.TypeMeta.GroupVersionKind().Version] = struct{}{}
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("can't visit resources: %w", err)
@@ -105,14 +106,14 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 
 			apiResourcesKindMap := map[string]metav1.APIResource{}
 
-			err := resource.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-				objGVK := objMetadata.TypeMeta.GroupVersionKind()
+			err := resource.VisitResources(func(r *Resource) error {
+				objGVK := r.metadata.TypeMeta.GroupVersionKind()
 				if objGVK.Group != gv.Group || objGVK.Version != gv.Version {
-					return
+					return nil
 				}
 
 				if _, ok := apiResourcesKindMap[objGVK.Kind]; ok {
-					return
+					return nil
 				}
 
 				apiResourcesKindMap[objGVK.Kind] = metav1.APIResource{
@@ -124,6 +125,7 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 					Kind:         objGVK.Kind,
 					Verbs:        []string{"get", "list"},
 				}
+				return nil
 			})
 			if err != nil {
 				return fmt.Errorf("can't visit resources: %w", err)
@@ -168,7 +170,19 @@ type APIGroupResource struct {
 	path string
 }
 
-func (gr *APIGroupResource) VisitResources(visitFunc func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata)) error {
+type Resource struct {
+	unstructured *unstructured.Unstructured
+	metadata     *metav1.PartialObjectMetadata
+
+	path string
+}
+
+func (r *Resource) GetLogs(containerName string) ([]byte, error) {
+	logsPath := path.Join(strings.TrimSuffix(r.path, ".yaml"), fmt.Sprintf("%s.current", containerName))
+	return os.ReadFile(logsPath)
+}
+
+func (gr *APIGroupResource) VisitResources(visitFunc func(resource *Resource) error) error {
 	err := filepath.WalkDir(gr.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -192,18 +206,27 @@ func (gr *APIGroupResource) VisitResources(visitFunc func(unstr *unstructured.Un
 			return fmt.Errorf("can't deserialize path %q: %w", path, err)
 		}
 
-		visitFunc(unstr, &metav1.PartialObjectMetadata{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       unstr.GetKind(),
-				APIVersion: unstr.GetAPIVersion(),
+		r := &Resource{
+			unstructured: unstr,
+			metadata: &metav1.PartialObjectMetadata{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       unstr.GetKind(),
+					APIVersion: unstr.GetAPIVersion(),
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        unstr.GetName(),
+					Namespace:   unstr.GetNamespace(),
+					Labels:      unstr.GetLabels(),
+					Annotations: unstr.GetAnnotations(),
+				},
 			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name:        unstr.GetName(),
-				Namespace:   unstr.GetNamespace(),
-				Labels:      unstr.GetLabels(),
-				Annotations: unstr.GetAnnotations(),
-			},
-		})
+			path: path,
+		}
+
+		err = visitFunc(r)
+		if err != nil {
+			return fmt.Errorf("can't visit path %q: %w", path, err)
+		}
 
 		return nil
 	})
@@ -296,11 +319,12 @@ func (mg *MustGatherArchive) ListNamespacedObjects(gvr metav1.GroupVersionResour
 			return nil
 		}
 
-		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			if namespace != corev1.NamespaceAll && objMetadata.Namespace != namespace {
-				return
+		err := apiResources.VisitResources(func(r *Resource) error {
+			if namespace != corev1.NamespaceAll && r.metadata.Namespace != namespace {
+				return nil
 			}
-			objects = append(objects, *unstr)
+			objects = append(objects, *r.unstructured)
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("can't visit resources: %w", err)
@@ -325,11 +349,13 @@ func (mg *MustGatherArchive) GetNamespacedObject(gvr metav1.GroupVersionResource
 			return nil
 		}
 
-		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			if objMetadata.Namespace != nn.Namespace || objMetadata.Name != nn.Name {
-				return
+		err := apiResources.VisitResources(func(r *Resource) error {
+			if r.metadata.Namespace != nn.Namespace || r.metadata.Name != nn.Name {
+				return nil
 			}
-			obj = unstr
+			obj = r.unstructured
+
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("can't visit resources: %w", err)
@@ -350,11 +376,12 @@ func (mg *MustGatherArchive) GetClusterObject(gvr metav1.GroupVersionResource, n
 			return nil
 		}
 
-		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			if objMetadata.Name != name {
-				return
+		err := apiResources.VisitResources(func(r *Resource) error {
+			if r.metadata.Name != name {
+				return nil
 			}
-			obj = unstr
+			obj = r.unstructured
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("can't visit resources: %w", err)
@@ -376,8 +403,9 @@ func (mg *MustGatherArchive) ListClusterObjects(gvr metav1.GroupVersionResource)
 			return nil
 		}
 
-		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
-			objects = append(objects, *unstr)
+		err := apiResources.VisitResources(func(r *Resource) error {
+			objects = append(objects, *r.unstructured)
+			return nil
 		})
 		if err != nil {
 			return fmt.Errorf("can't visit resources: %w", err)
@@ -393,4 +421,39 @@ func (mg *MustGatherArchive) ListClusterObjects(gvr metav1.GroupVersionResource)
 		Object: nil,
 		Items:  objects,
 	}, nil
+}
+
+func (mg *MustGatherArchive) GetLogs(gvr metav1.GroupVersionResource, nn types.NamespacedName, containerName string) ([]byte, error) {
+	var logs []byte
+	err := mg.visitNamespacedAPIGroupResources(func(apiResources *APIGroupResource) error {
+		if gvr.Group != apiResources.APIGroup || gvr.Resource != apiResources.Resource {
+			return nil
+		}
+
+		err := apiResources.VisitResources(func(r *Resource) error {
+			if r.metadata.Namespace != nn.Namespace || r.metadata.Name != nn.Name {
+				fmt.Println(r.metadata.Namespace, r.metadata.Name, nn.Namespace, nn.Name)
+				return nil
+			}
+
+			l, err := r.GetLogs(containerName)
+			if err != nil {
+				return fmt.Errorf("can't get logs from %q %q container %q", gvr, nn, containerName)
+			}
+
+			logs = l
+
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("can't visit resources: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
+	}
+
+	return logs, nil
 }

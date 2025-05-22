@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"net/http"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/zimnx/kubectl-view-gather/pkg/slices"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,8 @@ type ObjectStore interface {
 	ListClusterObjects(gvr metav1.GroupVersionResource) (runtime.Object, error)
 	GetNamespacedObject(gvr metav1.GroupVersionResource, nn types.NamespacedName) (runtime.Object, error)
 	GetClusterObject(gvr metav1.GroupVersionResource, name string) (runtime.Object, error)
+
+	GetLogs(gvr metav1.GroupVersionResource, nn types.NamespacedName, containerName string) ([]byte, error)
 }
 
 type APIServerStub struct {
@@ -51,6 +54,7 @@ func NewAPIServerStub(metaStore APIGroupsMetaStore, objectStore ObjectStore) *AP
 	mux.Handle("/api/v1/{resource}/", http.HandlerFunc(s.handleV1ClusterWideList))
 	mux.Handle("/api/v1/namespaces/{namespace}/{resource}", http.HandlerFunc(s.handleNamespacedV1List))
 	mux.Handle("/api/v1/namespaces/{namespace}/{resourceName}/{objectName}", http.HandlerFunc(s.handleNamespacedGetV1))
+	mux.Handle("/api/v1/namespaces/{namespace}/{resourceName}/{objectName}/log", http.HandlerFunc(s.handleNamespacedLogsV1))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/{resource}", http.HandlerFunc(s.handleClusterWideList))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/{resource}/{objectName}", http.HandlerFunc(s.handleClusterWideGet))
 	mux.Handle("/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}", http.HandlerFunc(s.handleNamespacedListing))
@@ -277,6 +281,45 @@ func (s *APIServerStub) handleV1ClusterWideList(w http.ResponseWriter, r *http.R
 	}
 
 	writeObjectAsRequested(w, r, resource, obj)
+}
+
+// handleNamespacedGetV1 handles `/api/v1/namespaces/{namespace}/{resourceName}/{objectName}/log` requests.
+func (s *APIServerStub) handleNamespacedLogsV1(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/api/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.SplitN(path, "/", 6)
+	if len(parts) != 6 {
+		http.NotFound(w, r)
+		return
+	}
+
+	version := parts[0]
+	namespace := parts[2]
+	resourceName := parts[3]
+	objectName := parts[4]
+	containerName := r.FormValue("container")
+
+	gvr := metav1.GroupVersionResource{
+		Group:    "",
+		Version:  version,
+		Resource: resourceName,
+	}
+
+	logs, err := s.objectStore.GetLogs(gvr, types.NamespacedName{Namespace: namespace, Name: objectName}, containerName)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(logs)
 }
 
 // handleNamespacedGetV1 handles `/api/v1/namespaces/{namespace}/{resourceName}/{objectName}` requests.
