@@ -78,7 +78,7 @@ func NewViewGatherCommand(streams genericiooptions.IOStreams) *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVarP(&o.mustGatherPath, "must-gather-path", o.mustGatherPath, "", "path to must-gather directory")
+	cmd.Flags().StringVarP(&o.mustGatherPath, "must-gather-path", "p", "", "path to must-gather directory")
 	o.configFlags.AddFlags(cmd.Flags())
 
 	return cmd
