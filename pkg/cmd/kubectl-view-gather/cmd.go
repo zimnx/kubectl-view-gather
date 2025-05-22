@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/zimnx/kubectl-view-gather/pkg/mustgather"
 	"github.com/zimnx/kubectl-view-gather/pkg/server"
-	"github.com/zimnx/kubectl-view-gather/pkg/store"
 	k8serrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/cli-runtime/pkg/genericiooptions"
@@ -110,8 +109,7 @@ func (o *ViewGatherOptions) Validate() error {
 
 func (o *ViewGatherOptions) Run() error {
 	mg := mustgather.NewMustGatherArchive(o.mustGatherPath)
-	objectStore := store.NewObject()
-	apiServer := server.NewAPIServerStub(mg, objectStore)
+	apiServer := server.NewAPIServerStub(mg, mg)
 	serverAddress := ":8080" // TODO: make this configurable or pick a free port dynamically
 	go func() {
 		if err := http.ListenAndServe(serverAddress, apiServer); err != nil {

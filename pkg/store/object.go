@@ -14,7 +14,7 @@ func NewObject() *Object {
 	return &Object{}
 }
 
-func (o Object) ListNamespacedObjects(resource string, namespace string) (runtime.Object, error) {
+func (o Object) ListNamespacedObjects(gvk string, namespace string) (runtime.Object, error) {
 	// TODO: implement properly
 	return &v1.PodList{
 		TypeMeta: metav1.TypeMeta{

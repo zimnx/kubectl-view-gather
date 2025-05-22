@@ -10,8 +10,11 @@ import (
 	"strings"
 
 	"github.com/zimnx/kubectl-view-gather/pkg/scheme"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 const (
@@ -37,7 +40,7 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 	visitFunc := func(resource *APIGroupResource) error {
 		versions := map[string]struct{}{}
 
-		err := resource.VisitResources(func(objMetadata *metav1.PartialObjectMetadata) {
+		err := resource.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
 			versions[objMetadata.TypeMeta.GroupVersionKind().Version] = struct{}{}
 		})
 		if err != nil {
@@ -103,7 +106,7 @@ func (mg *MustGatherArchive) GetAPIResources(gv metav1.GroupVersion) ([]metav1.A
 
 			apiResourcesKindMap := map[string]metav1.APIResource{}
 
-			err := resource.VisitResources(func(objMetadata *metav1.PartialObjectMetadata) {
+			err := resource.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
 				objGVK := objMetadata.TypeMeta.GroupVersionKind()
 				if objGVK.Group != gv.Group || objGVK.Version != gv.Version {
 					return
@@ -166,7 +169,7 @@ type APIGroupResource struct {
 	path string
 }
 
-func (gr *APIGroupResource) VisitResources(visitFunc func(objMetadata *metav1.PartialObjectMetadata)) error {
+func (gr *APIGroupResource) VisitResources(visitFunc func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata)) error {
 	err := filepath.WalkDir(gr.path, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -190,7 +193,7 @@ func (gr *APIGroupResource) VisitResources(visitFunc func(objMetadata *metav1.Pa
 			return fmt.Errorf("can't deserialize path %q: %w", path, err)
 		}
 
-		visitFunc(&metav1.PartialObjectMetadata{
+		visitFunc(unstr, &metav1.PartialObjectMetadata{
 			TypeMeta: metav1.TypeMeta{
 				Kind:       unstr.GetKind(),
 				APIVersion: unstr.GetAPIVersion(),
@@ -280,4 +283,62 @@ func (mg *MustGatherArchive) visitAPIGroupResources(rootPath string, visitFunc f
 	}
 
 	return nil
+}
+
+func (mg *MustGatherArchive) ListNamespacedObjects(gvr metav1.GroupVersionResource, namespace string) (runtime.Object, error) {
+	var objects []unstructured.Unstructured
+	err := mg.visitNamespacedAPIGroupResources(func(apiResources *APIGroupResource) error {
+		if gvr.Group != apiResources.APIGroup || gvr.Resource != apiResources.Resource {
+			return nil
+		}
+
+		err := apiResources.VisitResources(func(unstr *unstructured.Unstructured, objMetadata *metav1.PartialObjectMetadata) {
+			if objMetadata.Namespace != namespace {
+				return
+			}
+			objects = append(objects, *unstr)
+		})
+		if err != nil {
+			return fmt.Errorf("can't visit resources: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("can't visit namespaced resources: %w", err)
+	}
+
+	return &unstructured.UnstructuredList{
+		Object: nil,
+		Items:  objects,
+	}, nil
+}
+
+func (mg *MustGatherArchive) GetNamespacedObject(gvr metav1.GroupVersionResource, nn types.NamespacedName) (runtime.Object, error) {
+	// TODO: implement properly
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pod",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.Now(),
+		},
+	}, nil
+}
+func (mg *MustGatherArchive) GetClusterObject(gvr metav1.GroupVersionResource, name string) (runtime.Object, error) {
+	// TODO: implement properly
+	return &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Pod",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "pod",
+			Namespace:         "ns",
+			CreationTimestamp: metav1.Now(),
+		},
+	}, nil
 }

@@ -21,9 +21,9 @@ type APIGroupsMetaStore interface {
 
 // ObjectStore is an interface that defines methods to retrieve objects by namespace and name.
 type ObjectStore interface {
-	ListNamespacedObjects(resource string, namespace string) (runtime.Object, error)
-	GetNamespacedObject(resource string, nn types.NamespacedName) (runtime.Object, error)
-	GetClusterObject(resource string, name string) (runtime.Object, error)
+	ListNamespacedObjects(gvr metav1.GroupVersionResource, namespace string) (runtime.Object, error)
+	GetNamespacedObject(gvr metav1.GroupVersionResource, nn types.NamespacedName) (runtime.Object, error)
+	GetClusterObject(gvr metav1.GroupVersionResource, name string) (runtime.Object, error)
 }
 
 type APIServerStub struct {
@@ -181,7 +181,14 @@ func (s *APIServerStub) handleNamespacedV1(w http.ResponseWriter, r *http.Reques
 	namespace := parts[0]
 	resource := parts[1]
 
-	objList, err := s.objectStore.ListNamespacedObjects(resource, namespace)
+	// FIXME: parse it
+	gvr := metav1.GroupVersionResource{
+		Group:    "",
+		Version:  "",
+		Resource: resource,
+	}
+
+	objList, err := s.objectStore.ListNamespacedObjects(gvr, namespace)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -232,9 +239,14 @@ func (s *APIServerStub) handleNamespacedListing(w http.ResponseWriter, r *http.R
 	resourceName := parts[4]
 
 	resource := group + "/" + version + "/" + resourceName
+	gvr := metav1.GroupVersionResource{
+		Group:    group,
+		Version:  version,
+		Resource: resourceName,
+	}
 
 	// List objects in the specified namespace
-	objList, err := s.objectStore.ListNamespacedObjects(resource, namespace)
+	objList, err := s.objectStore.ListNamespacedObjects(gvr, namespace)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
