@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"net/http"
 	"strings"
 
@@ -251,11 +252,6 @@ func (s *APIServerStub) handleV1ClusterWideList(w http.ResponseWriter, r *http.R
 	}
 
 	apiResources, err := s.metaStore.GetAPIResources(metav1.GroupVersion{Group: "", Version: version})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	apiResource, _, ok := slices.Find(apiResources, func(r metav1.APIResource) bool {
 		return r.Name == resourceName
 	})
@@ -280,24 +276,7 @@ func (s *APIServerStub) handleV1ClusterWideList(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	// Convert into table
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, obj)
 }
 
 // handleNamespacedGetV1 handles `/api/v1/namespaces/{namespace}/{resourceName}/{objectName}` requests.
@@ -335,24 +314,7 @@ func (s *APIServerStub) handleNamespacedGetV1(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Convert into table
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, obj)
 }
 
 // handleClusterWideList handles `/apis/{apiGroup}/{apiVersion}/{resource}` requests.
@@ -413,26 +375,7 @@ func (s *APIServerStub) handleClusterWideList(w http.ResponseWriter, r *http.Req
 		}
 	}
 
-	// return the resource
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
-
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), objList, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, objList)
 }
 
 // handleNamespacedListing handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}` requests.
@@ -470,26 +413,8 @@ func (s *APIServerStub) handleNamespacedListing(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// return the resource
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
 
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), objList, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, objList)
 }
 
 // handleClusterWideGet handles `/apis/{apiGroup}/{apiVersion}/{resource}/{objectName}` requests.
@@ -527,24 +452,7 @@ func (s *APIServerStub) handleClusterWideGet(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Convert into table
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, obj)
 }
 
 // handleNamespacedGet handles `/apis/{apiGroup}/{apiVersion}/namespaces/{namespace}/{resourceName}/{objectName}` requests.
@@ -583,27 +491,63 @@ func (s *APIServerStub) handleNamespacedGet(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Convert into table
-	tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
-		Resource: resource,
-	})
-	tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	tbl.Kind = "Table"
-	tbl.APIVersion = "meta.k8s.io/v1"
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(tbl); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	writeObjectAsRequested(w, r, resource, obj)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeObjectAsRequested writes the object to the response writer in the format requested by the client.
+func writeObjectAsRequested(w http.ResponseWriter, r *http.Request, resource string, obj runtime.Object) {
+	if strings.Contains(r.Header.Get("Accept"), "as=Table") {
+		tableConvertor := rest.NewDefaultTableConvertor(schema.GroupResource{
+			Resource: resource,
+		})
+		tbl, err := tableConvertor.ConvertToTable(context.Background(), obj, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		tbl.Kind = "Table"
+		tbl.APIVersion = "meta.k8s.io/v1"
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(tbl); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		return
+	}
+
+	// If an object is UnstructuredList, extract its items and write them as a primitive list of objects.
+	if unstructuredList, ok := obj.(*unstructured.UnstructuredList); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+
+		objects := make([]runtime.RawExtension, len(unstructuredList.Items))
+		for i, item := range unstructuredList.Items {
+			objects[i] = runtime.RawExtension{Object: &item}
+		}
+		list := &metav1.List{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "List",
+				APIVersion: "v1",
+			},
+			Items: objects,
+		}
+		if err := json.NewEncoder(w).Encode(list); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(obj); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
