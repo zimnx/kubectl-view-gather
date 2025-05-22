@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/zimnx/kubectl-view-gather/pkg/scheme"
+	"github.com/zimnx/kubectl-view-gather/pkg/slices"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -80,7 +81,9 @@ func (mg *MustGatherArchive) GetAPIGroups() ([]metav1.APIGroup, error) {
 	// Filter and make apiGroups unique by group name
 	uniqueGroups := make(map[string]metav1.APIGroup)
 	for _, g := range apiGroups {
-		key := g.Name + "|" + g.APIVersion
+		key := strings.Join(slices.ConvertSlice(g.Versions, func(from metav1.GroupVersionForDiscovery) string {
+			return from.GroupVersion
+		}), ",")
 		uniqueGroups[key] = g
 	}
 	apiGroups = make([]metav1.APIGroup, 0, len(uniqueGroups))
